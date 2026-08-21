@@ -1,8 +1,12 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import shutil
 from .parser.ppt_parser import parse_pptx
+from .ai.ai_service import generate_insights
+from .ai.discussion_service import generate_discussion_areas
+import uuid
+import json
 
 app = FastAPI(title="ppt-produce-backend")
 
@@ -22,7 +26,9 @@ app.add_middleware(
 )
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / 'uploads'
+DRAFTS_DIR = UPLOAD_DIR / 'drafts'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @app.get("/api/health")
@@ -87,7 +93,23 @@ async def analyse_file(file: UploadFile = File(...)):
     try:
         result = parse_pptx(str(dest))
     except Exception as e:
+        # cleanup
+        try:
+            dest.unlink(missing_ok=True)
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Failed to parse PPTX: {e}")
+
+    # generate AI insights and discussion areas (rule-based modules)
+    try:
+        insights = generate_insights(result)
+        discussion = generate_discussion_areas(result)
+        result['ai_insights'] = insights.get('insights', [])
+        result['discussion_areas'] = discussion.get('discussion_areas', [])
+    except Exception:
+        # don't fail analysis if ai step has issues; include empty lists
+        result['ai_insights'] = []
+        result['discussion_areas'] = []
 
     # remove temp file
     try:
@@ -96,3 +118,16 @@ async def analyse_file(file: UploadFile = File(...)):
         pass
 
     return result
+
+
+@app.post('/api/draft/save')
+async def save_draft(draft: Dict = Body(...)):
+    """Save an edited draft JSON server-side (temporary storage). Returns draft_id."""
+    try:
+        draft_id = str(uuid.uuid4())
+        dest = DRAFTS_DIR / f"draft_{draft_id}.json"
+        with dest.open('w', encoding='utf-8') as f:
+            json.dump(draft, f, ensure_ascii=False, indent=2)
+        return {"success": True, "draft_id": draft_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save draft: {e}")
