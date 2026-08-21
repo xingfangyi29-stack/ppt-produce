@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import shutil
+from .parser.ppt_parser import parse_pptx
 
 app = FastAPI(title="ppt-produce-backend")
 
@@ -58,3 +59,40 @@ async def upload_file(file: UploadFile = File(...)):
 
     size = dest.stat().st_size
     return {"success": True, "filename": filename.name, "size": size}
+
+
+@app.post("/api/analyse")
+async def analyse_file(file: UploadFile = File(...)):
+    filename = Path(file.filename)
+    if filename.suffix.lower() != '.pptx':
+        raise HTTPException(status_code=400, detail="Only .pptx files are accepted")
+
+    # basic zip header validation
+    header = await file.read(4)
+    await file.seek(0)
+    if header[:2] != b'PK':
+        raise HTTPException(status_code=400, detail="Invalid PPTX file (not a ZIP archive)")
+
+    # write to a temp path
+    dest = UPLOAD_DIR / (f"analyse_{filename.name}")
+    try:
+        with dest.open('wb') as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to store uploaded file for analysis")
+    finally:
+        await file.close()
+
+    # call parser
+    try:
+        result = parse_pptx(str(dest))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse PPTX: {e}")
+
+    # remove temp file
+    try:
+        dest.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    return result
