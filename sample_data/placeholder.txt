@@ -1,0 +1,1 @@
+This folder is intended to hold sample PPTX files exported from your survey system for local parsing tests.
